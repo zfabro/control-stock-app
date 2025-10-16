@@ -1,0 +1,5 @@
+# Archivos de credenciales que nunca deben subirse
+client_secret.json
+token.json
+credentials.json
+*.db

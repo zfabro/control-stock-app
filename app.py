@@ -15,7 +15,8 @@ st.title('Sistema de Control de Stock con Google Sheets')
 
 # --- Conexión a Google Sheets (con caché para la conexión) ---
 @st.cache_resource
-def conectar_gsheet():
+def conectar_google_client():
+    """Se conecta y autoriza a Google, devuelve el CLIENTE (la conexión)."""
     SCOPES = ["https://www.googleapis.com/auth/spreadsheets", "https://www.googleapis.com/auth/drive"]
     creds = None
     if os.path.exists('client_secret.json'): # Lógica para tu PC
@@ -37,6 +38,7 @@ def conectar_gsheet():
         if creds_key in creds_dict:
              creds = Credentials.from_authorized_user_info(info=creds_dict[creds_key], scopes=SCOPES)
         else:
+             # Si el formato es incorrecto, intentar leerlo como token directamente
              try:
                  creds = Credentials.from_authorized_user_info(info=creds_dict, scopes=SCOPES)
              except KeyError as e:
@@ -48,68 +50,58 @@ def conectar_gsheet():
         st.stop()
 
     client = gspread.authorize(creds)
-    try:
-        sheet = client.open("Base de Datos Fábrica").sheet1
-        print("Conexión a Google Sheets establecida.") # Mensaje para depuración
-        return sheet
-    except gspread.exceptions.SpreadsheetNotFound:
-        st.error("Error: No se encontró la hoja de cálculo 'Base de Datos Fábrica'. Verifica el nombre.")
-        st.stop() # Detiene la ejecución si no encuentra la hoja
-    except Exception as e:
-        st.error(f"Error al conectar con Google Sheets o abrir la hoja: {e}")
-        st.stop() # Detiene si hay otro error de conexión
-
+    print("Cliente Google Autorizado.") # Mensaje para depuración
+    return client
 
 # --- Funciones de Datos ---
-# --- FUNCIÓN CORREGIDA PARA LEER FECHAS MIXTAS ---
-def cargar_y_procesar_datos(_sheet):
-    """Carga y procesa datos, manejando múltiples formatos de fecha."""
-    if _sheet is None:
+# --- SIN CACHÉ DE DATOS ---
+def cargar_y_procesar_datos(client):
+    """Carga y procesa datos frescos CADA VEZ que se llama."""
+    if client is None:
         return pd.DataFrame()
 
-    print("Cargando datos frescos desde Google Sheets...")
+    print("Cargando datos frescos desde Google Sheets...") # Mensaje para depuración
     try:
-        _sheet = _sheet.spreadsheet.get_worksheet(0)
-        records = _sheet.get_all_records()
+        # Abre la hoja CADA VEZ para asegurar datos frescos
+        sheet = client.open("Base de Datos Fábrica").sheet1
+        records = sheet.get_all_records()
+    except gspread.exceptions.SpreadsheetNotFound:
+        st.error("Error: No se encontró la hoja de cálculo 'Base de Datos Fábrica'. Verifica el nombre.")
+        st.stop()
     except Exception as e:
         st.warning(f"No se pudieron cargar los datos de GSheet: {e}")
         return pd.DataFrame()
 
     df = pd.DataFrame(records)
     required_cols_db = ['fecha_hora', 'cantidad', 'material_codigo']
-    
     if not df.empty and all(col in df.columns for col in required_cols_db):
         
-        # --- CAMBIO CLAVE: LEEMOS AMBOS FORMATOS ---
+        # --- CORRECCIÓN DE FECHAS MIXTAS ---
         df['fecha_hora'] = df['fecha_hora'].astype(str).str.strip()
-        
         # 1. Intentar leer el formato nuevo (DD/MM/YYYY HH:MM:SS)
         formato_nuevo = pd.to_datetime(df['fecha_hora'], format="%d/%m/%Y %H:%M:%S", errors='coerce')
-        
         # 2. Intentar leer el formato viejo (auto-detectar YYYY-MM-DD HH:MM:SS)
         formato_viejo = pd.to_datetime(df['fecha_hora'], errors='coerce')
-        
-        # 3. Combinar los resultados. Donde falló el formato nuevo, usa el viejo.
+        # 3. Combinar los resultados
         df['fecha_hora'] = formato_nuevo.fillna(formato_viejo)
-        # --- FIN DEL CAMBIO ---
+        # --- FIN DE LA CORRECCIÓN ---
 
         df['cantidad'] = pd.to_numeric(df['cantidad'], errors='coerce')
         if 'planta' not in df.columns:
             df['planta'] = 'N/A'
         
-        # 4. Eliminar solo las filas donde la fecha falló en AMBOS formatos
+        # 4. Eliminar filas donde la fecha falló en AMBOS formatos
         df.dropna(subset=['fecha_hora', 'cantidad', 'material_codigo'], inplace=True)
         
-        print(f"✅ {len(df)} registros cargados (Última fecha leída: {df['fecha_hora'].max()})")
     elif not df.empty:
-         st.warning("Faltan columnas requeridas en la base de datos.")
+         st.warning(f"Datos cargados, pero podrían faltar columnas requeridas ({required_cols_db}) o tener formato inesperado.")
     
     return df
 
 
-def guardar_dato_gsheet(sheet, nuevo_dato):
+def guardar_dato_gsheet(client, nuevo_dato):
     """Guarda el dato y fuerza la recarga."""
-    if sheet is None:
+    if client is None:
         st.error("Error de conexión, no se pudo guardar el dato.")
         return
 
@@ -120,16 +112,16 @@ def guardar_dato_gsheet(sheet, nuevo_dato):
         str(nuevo_dato['planta'])
     ]
     try:
+        # Abre la hoja solo para escribir
+        sheet = client.open("Base de Datos Fábrica").sheet1
         sheet.append_row(fila)
         st.success(f"¡Guardado! Actualizando vista...")
-        st.cache_data.clear()
-        st.cache_resource.clear()
-        if 'df_stock_completo' in st.session_state:
-            del st.session_state['df_stock_completo']
-        if 'df_stock_historial' in st.session_state:
-             del st.session_state['df_stock_historial']
-        time.sleep(2)
-        st.rerun()
+        
+        # Limpiamos solo la caché de la CONEXIÓN
+        st.cache_resource.clear() 
+        
+        time.sleep(1.5) # Pausa de 1.5 segundos
+        st.rerun() # Refrescamos la interfaz
     except Exception as e:
         st.error(f"Error al guardar en Google Sheets: {e}")
 
@@ -137,6 +129,7 @@ def calcular_consumo_diario(df_historial):
     if len(df_historial) < 2:
         return 0
     df = df_historial.sort_values('fecha_hora').copy()
+    # Asegurarse de que 'cantidad' sea numérica
     df['cantidad'] = pd.to_numeric(df['cantidad'], errors='coerce')
     df = df.dropna(subset=['cantidad'])
     if len(df) < 2: return 0
@@ -239,10 +232,10 @@ materiales_catalogo = pd.DataFrame([
 
 # --- Interfaz Gráfica de la Aplicación ---
 try:
-    gsheet_connection = conectar_gsheet() 
+    gspread_client = conectar_google_client() # Obtenemos el cliente (la conexión)
 
-    if gsheet_connection is None:
-        st.stop() 
+    if gspread_client is None:
+        st.stop() # Detiene la ejecución si no hay conexión
 
     st.header('Cargar Nuevo Relevamiento de Stock')
     materias_primas_cat = materiales_catalogo[materiales_catalogo['tipo'] == 'MATERIA PRIMA']
@@ -257,7 +250,7 @@ try:
         if st.button('Guardar Materia Prima', key='mp_save'):
             planta_seleccionada = materias_primas_cat[materias_primas_cat['descripcion'] == seleccion_mp].iloc[0]['planta']
             nuevo_relevamiento = {'material_descripcion': seleccion_mp, 'fecha_hora': datetime.now(), 'cantidad': cantidad_mp, 'planta': planta_seleccionada}
-            guardar_dato_gsheet(gsheet_connection, nuevo_relevamiento) 
+            guardar_dato_gsheet(gspread_client, nuevo_relevamiento) # Pasamos el cliente
     with tab2:
         st.subheader('Cargar Stock de Insumo')
         opciones_in = insumos_cat['descripcion'].unique().tolist()
@@ -273,22 +266,25 @@ try:
         cantidad_in = st.number_input(f'Ingrese la Cantidad en {unidad_seleccionada}:', min_value=0.0, format="%.2f", key='in_kg')
         if st.button('Guardar Insumo', key='in_save'):
             nuevo_relevamiento = {'material_descripcion': seleccion_in, 'fecha_hora': datetime.now(), 'cantidad': cantidad_in, 'planta': planta_seleccionada_in}
-            guardar_dato_gsheet(gsheet_connection, nuevo_relevamiento)
+            guardar_dato_gsheet(gspread_client, nuevo_relevamiento) # Pasamos el cliente
 
     st.divider()
     st.header('Análisis y Reportes de Stock')
     
     # --- Leemos los datos UNA VEZ para los reportes predictivos ---
-    df_stock_para_reportes = cargar_y_procesar_datos(gsheet_connection)
+    # Usamos la conexión cacheada aquí
+    df_stock_para_reportes = cargar_y_procesar_datos(gspread_client)
 
     def generar_reporte_predictivo(catalogo_df, df_historico):
         reporte_data = []
+        # Asegurarse de que df_historico tiene la columna 'material_codigo'
         if 'material_codigo' not in df_historico.columns and not df_historico.empty:
              st.error("Error: La columna 'material_codigo' no se encontró en los datos cargados.")
-             return pd.DataFrame() 
+             return pd.DataFrame() # Devuelve DF vacío si falta la columna
 
         for desc in catalogo_df['descripcion'].unique():
             row_cat = catalogo_df[catalogo_df['descripcion'] == desc].iloc[0]
+            # Filtrar historial si no está vacío
             df_material_hist = df_historico[df_historico['material_codigo'] == desc] if not df_historico.empty else pd.DataFrame()
 
             ultimo_stock = 0
@@ -329,6 +325,7 @@ try:
     else:
         catalogo_filtrado = materiales_catalogo[materiales_catalogo['planta'] == planta_seleccionada]
 
+    # Generamos el reporte usando los datos ya cargados
     df_reporte = generar_reporte_predictivo(catalogo_filtrado, df_stock_para_reportes) 
     
     if not df_reporte.empty:
@@ -364,7 +361,7 @@ try:
 
     st.subheader("📖 Historial Completo de la Base de Datos")
     # --- CAMBIO CLAVE: Volvemos a leer los datos justo antes de mostrar ---
-    df_stock_historial = cargar_y_procesar_datos(gsheet_connection) 
+    df_stock_historial = cargar_y_procesar_datos(gspread_client) 
     if not df_stock_historial.empty:
         st.dataframe(df_stock_historial.sort_values('fecha_hora', ascending=False))
     else:

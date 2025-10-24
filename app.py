@@ -26,83 +26,110 @@ def conectar_gsheet():
                 creds.refresh(Request())
             else:
                 flow = InstalledAppFlow.from_client_secrets_file('client_secret.json', SCOPES)
-                creds = flow.run_local_server(port=0)
+                # Forzar la aprobación del usuario cada vez puede ayudar con tokens corruptos
+                creds = flow.run_local_server(port=0, prompt='consent')
             with open('token.json', 'w') as token:
                 token.write(creds.to_json())
     else: # Lógica para la nube (Streamlit Cloud)
         creds_dict = st.secrets["gcp_secret"]
+        # Usar la estructura correcta del secret (installed o web)
         creds_key = "installed" if "installed" in creds_dict else "web"
-        creds = Credentials.from_authorized_user_info(info=creds_dict[creds_key], scopes=SCOPES)
+        if creds_key in creds_dict:
+             creds = Credentials.from_authorized_user_info(info=creds_dict[creds_key], scopes=SCOPES)
+        else:
+             try:
+                 creds = Credentials.from_authorized_user_info(info=creds_dict, scopes=SCOPES)
+             except KeyError as e:
+                  st.error(f"Error al leer secrets: Falta la clave {e}. Asegúrate de que el formato TOML sea correcto.")
+                  st.stop()
+
+    if creds is None:
+        st.error("No se pudieron obtener las credenciales de Google.")
+        st.stop()
 
     client = gspread.authorize(creds)
-    # Reemplaza "Base de Datos Fábrica" si tu hoja se llama diferente
-    sheet = client.open("Base de Datos Fábrica").sheet1
-    print("Conexión a Google Sheets establecida.") # Mensaje para depuración
-    return sheet
+    try:
+        sheet = client.open("Base de Datos Fábrica").sheet1
+        print("Conexión a Google Sheets establecida.") # Mensaje para depuración
+        return sheet
+    except gspread.exceptions.SpreadsheetNotFound:
+        st.error("Error: No se encontró la hoja de cálculo 'Base de Datos Fábrica'. Verifica el nombre.")
+        st.stop() # Detiene la ejecución si no encuentra la hoja
+    except Exception as e:
+        st.error(f"Error al conectar con Google Sheets o abrir la hoja: {e}")
+        st.stop() # Detiene si hay otro error de conexión
 
+
+# --- Funciones de Datos ---
+# --- FUNCIÓN CORREGIDA PARA LEER FECHAS MIXTAS ---
 def cargar_y_procesar_datos(_sheet):
-    """Carga y procesa datos directamente desde Google Sheets (forzando recarga y corrigiendo fechas)."""
-    import pandas as pd
+    """Carga y procesa datos, manejando múltiples formatos de fecha."""
+    if _sheet is None:
+        return pd.DataFrame()
 
-    print("🔄 Cargando datos frescos desde Google Sheets...")
-
-    # Forzar recarga real desde el servidor
-    sheet = _sheet.spreadsheet.get_worksheet(0)
-    records = sheet.get_all_records()
+    print("Cargando datos frescos desde Google Sheets...")
+    try:
+        _sheet = _sheet.spreadsheet.get_worksheet(0)
+        records = _sheet.get_all_records()
+    except Exception as e:
+        st.warning(f"No se pudieron cargar los datos de GSheet: {e}")
+        return pd.DataFrame()
 
     df = pd.DataFrame(records)
-
-    # 🧹 Normalizar nombres de columnas (quita espacios, minúsculas)
-    df.columns = df.columns.str.strip().str.lower().str.replace(" ", "_")
-
-    if not df.empty and all(col in df.columns for col in ["fecha_hora", "cantidad", "material_codigo"]):
+    required_cols_db = ['fecha_hora', 'cantidad', 'material_codigo']
+    
+    if not df.empty and all(col in df.columns for col in required_cols_db):
         
+        # --- CAMBIO CLAVE: LEEMOS AMBOS FORMATOS ---
+        df['fecha_hora'] = df['fecha_hora'].astype(str).str.strip()
+        
+        # 1. Intentar leer el formato nuevo (DD/MM/YYYY HH:MM:SS)
+        formato_nuevo = pd.to_datetime(df['fecha_hora'], format="%d/%m/%Y %H:%M:%S", errors='coerce')
+        
+        # 2. Intentar leer el formato viejo (auto-detectar YYYY-MM-DD HH:MM:SS)
+        formato_viejo = pd.to_datetime(df['fecha_hora'], errors='coerce')
+        
+        # 3. Combinar los resultados. Donde falló el formato nuevo, usa el viejo.
+        df['fecha_hora'] = formato_nuevo.fillna(formato_viejo)
+        # --- FIN DEL CAMBIO ---
 
-        # 🧭 Conversión robusta de fechas (acepta ambos formatos)
-        df["fecha_hora"] = df["fecha_hora"].astype(str).str.strip()
-
-        # Intentar primero el formato con día/mes/año
-        fechas = pd.to_datetime(df["fecha_hora"], format="%d/%m/%Y %H:%M:%S", errors="coerce")
-
-        # Si quedaron None, intentar el formato año-mes-día
-        mas_fechas = pd.to_datetime(df["fecha_hora"], format="%Y-%m-%d %H:%M:%S", errors="coerce")
-
-        # Combinar ambos resultados
-        df["fecha_hora"] = fechas.fillna(mas_fechas)
-
-        print(f"✅ Fechas válidas: {(~df['fecha_hora'].isna()).sum()} / {len(df)} registros")
-
-
-
-        # 🔢 Convertir cantidad a número
-        df["cantidad"] = pd.to_numeric(df["cantidad"], errors="coerce")
-
-        # ❌ Eliminar filas sin cantidad (pero mantener aunque no tengan fecha)
-        df = df.dropna(subset=["cantidad"])
-
-    print(f"✅ {len(df)} registros cargados (última fecha: {df['fecha_hora'].max()})")
+        df['cantidad'] = pd.to_numeric(df['cantidad'], errors='coerce')
+        if 'planta' not in df.columns:
+            df['planta'] = 'N/A'
+        
+        # 4. Eliminar solo las filas donde la fecha falló en AMBOS formatos
+        df.dropna(subset=['fecha_hora', 'cantidad', 'material_codigo'], inplace=True)
+        
+        print(f"✅ {len(df)} registros cargados (Última fecha leída: {df['fecha_hora'].max()})")
+    elif not df.empty:
+         st.warning("Faltan columnas requeridas en la base de datos.")
+    
     return df
-
-    return df
-
 
 
 def guardar_dato_gsheet(sheet, nuevo_dato):
-    """Guarda el dato, limpia cachés, espera y fuerza la recarga."""
+    """Guarda el dato y fuerza la recarga."""
+    if sheet is None:
+        st.error("Error de conexión, no se pudo guardar el dato.")
+        return
+
     fila = [
         str(nuevo_dato['material_descripcion']),
-        nuevo_dato['fecha_hora'].strftime("%d/%m/%Y %H:%M:%S"), # Guardamos como string con formato DD/MM/AAAA HH:MM:SS
+        nuevo_dato['fecha_hora'].strftime("%d/%m/%Y %H:%M:%S"), # Formato DD/MM/AAAA HH:MM:SS
         float(nuevo_dato['cantidad']),
         str(nuevo_dato['planta'])
     ]
     try:
         sheet.append_row(fila)
         st.success(f"¡Guardado! Actualizando vista...")
-        # Limpiamos cachés justo antes de reiniciar
         st.cache_data.clear()
         st.cache_resource.clear()
-        time.sleep(1) # Pequeña pausa
-        st.rerun() # Refrescamos la interfaz
+        if 'df_stock_completo' in st.session_state:
+            del st.session_state['df_stock_completo']
+        if 'df_stock_historial' in st.session_state:
+             del st.session_state['df_stock_historial']
+        time.sleep(2)
+        st.rerun()
     except Exception as e:
         st.error(f"Error al guardar en Google Sheets: {e}")
 
@@ -110,12 +137,19 @@ def calcular_consumo_diario(df_historial):
     if len(df_historial) < 2:
         return 0
     df = df_historial.sort_values('fecha_hora').copy()
+    df['cantidad'] = pd.to_numeric(df['cantidad'], errors='coerce')
+    df = df.dropna(subset=['cantidad'])
+    if len(df) < 2: return 0
+
     df['Consumo'] = df['cantidad'].diff(-1) * -1
     df['Dias'] = df['fecha_hora'].diff(-1).dt.total_seconds().abs() / (24 * 3600)
     df_consumo = df[df['Consumo'] > 0]
     if df_consumo.empty or df_consumo['Dias'].sum() == 0:
         return 0
-    return df_consumo['Consumo'].sum() / df_consumo['Dias'].sum()
+    dias_totales = df_consumo['Dias'].sum()
+    if dias_totales == 0:
+        return 0
+    return df_consumo['Consumo'].sum() / dias_totales
 
 # --- Catálogo Completo y Corregido (Basado en tu última lista) ---
 materiales_catalogo = pd.DataFrame([
@@ -205,11 +239,10 @@ materiales_catalogo = pd.DataFrame([
 
 # --- Interfaz Gráfica de la Aplicación ---
 try:
-    gsheet = conectar_gsheet()
+    gsheet_connection = conectar_gsheet() 
 
-    # Inicializamos el contador de versión si no existe
-    if 'data_version' not in st.session_state:
-        st.session_state.data_version = 0
+    if gsheet_connection is None:
+        st.stop() 
 
     st.header('Cargar Nuevo Relevamiento de Stock')
     materias_primas_cat = materiales_catalogo[materiales_catalogo['tipo'] == 'MATERIA PRIMA']
@@ -223,9 +256,8 @@ try:
         cantidad_mp = st.number_input('Ingrese la Cantidad en kg:', min_value=0.0, format="%.2f", key='mp_kg')
         if st.button('Guardar Materia Prima', key='mp_save'):
             planta_seleccionada = materias_primas_cat[materias_primas_cat['descripcion'] == seleccion_mp].iloc[0]['planta']
-            nuevo_relevamiento = {'material_descripcion': seleccion_mp, 'fecha_hora': datetime.now().strftime("%Y-%m-%d %H:%M:%S"), 'cantidad': cantidad_mp, 'planta': planta_seleccionada}
-            guardar_dato_gsheet(gsheet, nuevo_relevamiento)
-            # st.success ya está dentro de guardar_dato_gsheet()
+            nuevo_relevamiento = {'material_descripcion': seleccion_mp, 'fecha_hora': datetime.now(), 'cantidad': cantidad_mp, 'planta': planta_seleccionada}
+            guardar_dato_gsheet(gsheet_connection, nuevo_relevamiento) 
     with tab2:
         st.subheader('Cargar Stock de Insumo')
         opciones_in = insumos_cat['descripcion'].unique().tolist()
@@ -240,42 +272,41 @@ try:
                 planta_seleccionada_in = info_df.iloc[0]['planta']
         cantidad_in = st.number_input(f'Ingrese la Cantidad en {unidad_seleccionada}:', min_value=0.0, format="%.2f", key='in_kg')
         if st.button('Guardar Insumo', key='in_save'):
-            nuevo_relevamiento = {'material_descripcion': seleccion_in, 'fecha_hora': datetime.now().strftime("%Y-%m-%d %H:%M:%S"), 'cantidad': cantidad_in, 'planta': planta_seleccionada_in}
-            guardar_dato_gsheet(gsheet, nuevo_relevamiento)
-            # st.success ya está dentro de guardar_dato_gsheet()
+            nuevo_relevamiento = {'material_descripcion': seleccion_in, 'fecha_hora': datetime.now(), 'cantidad': cantidad_in, 'planta': planta_seleccionada_in}
+            guardar_dato_gsheet(gsheet_connection, nuevo_relevamiento)
 
     st.divider()
     st.header('Análisis y Reportes de Stock')
     
-    # --- Lectura de datos SIN CACHÉ ---
-    df_stock_completo = cargar_y_procesar_datos(gsheet)
+    # --- Leemos los datos UNA VEZ para los reportes predictivos ---
+    df_stock_para_reportes = cargar_y_procesar_datos(gsheet_connection)
 
     def generar_reporte_predictivo(catalogo_df, df_historico):
         reporte_data = []
+        if 'material_codigo' not in df_historico.columns and not df_historico.empty:
+             st.error("Error: La columna 'material_codigo' no se encontró en los datos cargados.")
+             return pd.DataFrame() 
+
         for desc in catalogo_df['descripcion'].unique():
             row_cat = catalogo_df[catalogo_df['descripcion'] == desc].iloc[0]
-            # Asegurarse de que df_historico tiene la columna 'material_codigo'
-            if 'material_codigo' not in df_historico.columns:
-                 st.error("Error: La columna 'material_codigo' no se encontró en los datos cargados.")
-                 return pd.DataFrame() # Devuelve DF vacío si falta la columna
+            df_material_hist = df_historico[df_historico['material_codigo'] == desc] if not df_historico.empty else pd.DataFrame()
 
-            df_material_hist = df_historico[df_historico['material_codigo'] == desc]
-            
             ultimo_stock = 0
             consumo_diario = 0
             dias_restantes = np.inf
             fecha_agotamiento = 'N/A'
-            
+
             if not df_material_hist.empty:
-                # Asegurarse de ordenar por fecha_hora antes de tomar el último
                 df_material_hist_sorted = df_material_hist.sort_values('fecha_hora')
                 ultimo_stock = df_material_hist_sorted.iloc[-1]['cantidad']
                 consumo_diario = calcular_consumo_diario(df_material_hist_sorted)
                 dias_restantes = ultimo_stock / consumo_diario if consumo_diario > 0 else np.inf
-                if dias_restantes > 0 and dias_restantes != np.inf:
+                if dias_restantes > 0 and dias_restantes != np.inf and pd.notna(dias_restantes):
                     fecha_dt = datetime.now() + timedelta(days=dias_restantes)
                     fecha_agotamiento = fecha_dt.strftime('%Y-%m-%d')
-            
+                elif dias_restantes == np.inf:
+                    fecha_agotamiento = "Sin Consumo" # Corregido
+
             reporte_data.append({
                 'Código': row_cat['codigo'],
                 'Descripción': desc,
@@ -298,60 +329,46 @@ try:
     else:
         catalogo_filtrado = materiales_catalogo[materiales_catalogo['planta'] == planta_seleccionada]
 
-    df_reporte = generar_reporte_predictivo(catalogo_filtrado, df_stock_completo)
+    df_reporte = generar_reporte_predictivo(catalogo_filtrado, df_stock_para_reportes) 
     
     if not df_reporte.empty:
-        # --- CORRECCIÓN FINAL PARA MOSTRAR Y FILTRAR ---
-        # 1. Función para formatear CADA valor a string
-        def format_dias_restantes_str(value):
-            if pd.isna(value):
-                return "" 
-            elif value == np.inf:
-                return "Sin Consumo"
-            elif isinstance(value, (int, float)):
-                return str(round(value, 1))
-            else:
-                return str(value) 
-
-        # 2. Creamos la copia para mostrar en pantalla
         df_display = df_reporte.copy()
-        
-        # 3. Aplicamos la función para crear una columna de STRINGS formateados
+        def format_dias_restantes_str(value):
+            if pd.isna(value): return "" 
+            elif value == np.inf: return "Sin Consumo"
+            elif isinstance(value, (int, float)): return str(round(value, 1))
+            else: return str(value) 
         if 'Días Restantes' in df_display.columns:
-            df_display['Días Restantes'] = df_display['Días Restantes'].apply(format_dias_restantes_str)
-        
-        # 4. Mostramos la copia formateada (ahora la columna es 100% strings)
+            # --- CORRECCIÓN CLAVE ---
+            # Forzamos toda la columna a ser de tipo 'object' (mixto) ANTES de aplicar
+            df_display['Días Restantes'] = df_display['Días Restantes'].astype(object).apply(format_dias_restantes_str)
+
         st.dataframe(df_display)
 
-        # 5. Usamos el DataFrame original (con números) para filtrar las alertas
         if 'Días Restantes' in df_reporte.columns:
-            # Creamos una columna numérica temporal SOLO para el filtro, asegurando que los NaN se ignoren
             df_reporte['Días Restantes Num'] = pd.to_numeric(df_reporte['Días Restantes'], errors='coerce') 
             alertas = df_reporte[df_reporte['Días Restantes Num'].notna() &
                 ( ((df_reporte['Planta'] == 'Materias Primas') & (df_reporte['Días Restantes Num'] <= 15)) |
                   ((df_reporte['Planta'] != 'Materias Primas') & (df_reporte['Días Restantes Num'] <= 30)) )
             ]
         else:
-             alertas = pd.DataFrame() # DF vacío si no existe la columna
+             alertas = pd.DataFrame() 
         
         if not alertas.empty:
             st.write('**⚠️ Alertas de Stock Bajo**')
             alertas_display = alertas.copy()
-            # Usamos la columna numérica temporal para mostrar los días redondeados
             alertas_display['Días Restantes'] = alertas_display['Días Restantes Num'].apply(lambda x: round(x, 1)) 
             st.dataframe(alertas_display[['Código', 'Descripción', 'Planta', 'Días Restantes', 'Unidad']])
 
-        st.divider()
+    st.divider()
 
-
-        st.subheader("📖 Historial Completo de la Base de Datos")
-        df_stock_historial = cargar_y_procesar_datos(gsheet)
-
-        if not df_stock_historial.empty:
-            st.dataframe(df_stock_historial.sort_values("fecha_hora", ascending=False))
-        else:
-            st.info("Aún no se han cargado datos en la hoja de cálculo.")
-
+    st.subheader("📖 Historial Completo de la Base de Datos")
+    # --- CAMBIO CLAVE: Volvemos a leer los datos justo antes de mostrar ---
+    df_stock_historial = cargar_y_procesar_datos(gsheet_connection) 
+    if not df_stock_historial.empty:
+        st.dataframe(df_stock_historial.sort_values('fecha_hora', ascending=False))
+    else:
+        st.info("Aún no se han cargado datos en la hoja de cálculo.")
 
 except Exception as e:
     st.error("Ocurrió un error.")

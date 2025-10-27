@@ -15,43 +15,37 @@ st.title('Sistema de Control de Stock con Google Sheets')
 
 # --- Conexión a Google Sheets (con caché para la conexión) ---
 @st.cache_resource
+@st.cache_resource
 def conectar_google_client():
     """Se conecta y autoriza a Google, devuelve el CLIENTE (la conexión)."""
-    SCOPES = ["https://www.googleapis.com/auth/spreadsheets", "https://www.googleapis.com/auth/drive"]
-    creds = None
-    if os.path.exists('client_secret.json'): # Lógica para tu PC
-        if os.path.exists('token.json'):
-            creds = Credentials.from_authorized_user_file('token.json', SCOPES)
-        if not creds or not creds.valid:
-            if creds and creds.expired and creds.refresh_token:
-                creds.refresh(Request())
-            else:
-                flow = InstalledAppFlow.from_client_secrets_file('client_secret.json', SCOPES)
-                # Forzar la aprobación del usuario cada vez puede ayudar con tokens corruptos
-                creds = flow.run_local_server(port=0, prompt='consent')
-            with open('token.json', 'w') as token:
-                token.write(creds.to_json())
-    else: # Lógica para la nube (Streamlit Cloud)
-        creds_dict = st.secrets["gcp_secret"]
-        # Usar la estructura correcta del secret (installed o web)
-        creds_key = "installed" if "installed" in creds_dict else "web"
-        if creds_key in creds_dict:
-             creds = Credentials.from_authorized_user_info(info=creds_dict[creds_key], scopes=SCOPES)
-        else:
-             # Si el formato es incorrecto, intentar leerlo como token directamente
-             try:
-                 creds = Credentials.from_authorized_user_info(info=creds_dict, scopes=SCOPES)
-             except KeyError as e:
-                  st.error(f"Error al leer secrets: Falta la clave {e}. Asegúrate de que el formato TOML sea correcto.")
-                  st.stop()
+    import gspread
+    import json
+    from google.oauth2.credentials import Credentials
 
-    if creds is None:
-        st.error("No se pudieron obtener las credenciales de Google.")
+    SCOPES = ["https://www.googleapis.com/auth/spreadsheets",
+              "https://www.googleapis.com/auth/drive"]
+
+    creds = None
+
+    # --- Local: si existe token.json ---
+    import os
+    if os.path.exists('token.json'):
+        creds = Credentials.from_authorized_user_file('token.json', SCOPES)
+
+    # --- Streamlit Cloud: usar st.secrets ---
+    elif "gcp_secret" in st.secrets:
+        token_data = json.loads(st.secrets["gcp_secret"]["token_json"])
+        creds = Credentials.from_authorized_user_info(info=token_data, scopes=SCOPES)
+
+    # --- Error si no hay credenciales ---
+    if not creds or not creds.valid:
+        st.error("No se pudieron obtener las credenciales de Google o el token expiró.")
         st.stop()
 
     client = gspread.authorize(creds)
-    print("Cliente Google Autorizado.") # Mensaje para depuración
+    st.success("Cliente Google Autorizado ✅")
     return client
+
 
 # --- Funciones de Datos ---
 # --- SIN CACHÉ DE DATOS ---

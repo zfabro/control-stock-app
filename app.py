@@ -17,33 +17,34 @@ st.title('Sistema de Control de Stock con Google Sheets')
 @st.cache_resource
 @st.cache_resource
 def conectar_google_client():
-    """Se conecta y autoriza a Google, devuelve el CLIENTE (la conexión)."""
-    import gspread
+    """Conecta usando la cuenta de servicio (segura y sin expiración)."""
     import json
-    from google.oauth2.credentials import Credentials
+    import gspread
+    from google.oauth2 import service_account
 
     SCOPES = ["https://www.googleapis.com/auth/spreadsheets",
               "https://www.googleapis.com/auth/drive"]
 
     creds = None
 
-    # --- Local: si existe token.json ---
-    import os
-    if os.path.exists('token.json'):
-        creds = Credentials.from_authorized_user_file('token.json', SCOPES)
+    # --- Local: archivo JSON ---
+    if os.path.exists("service_account.json"):
+        creds = service_account.Credentials.from_service_account_file(
+            "service_account.json", scopes=SCOPES
+        )
 
-    # --- Streamlit Cloud: usar st.secrets ---
-    elif "gcp_secret" in st.secrets:
-        token_data = json.loads(st.secrets["gcp_secret"]["token_json"])
-        creds = Credentials.from_authorized_user_info(info=token_data, scopes=SCOPES)
-
-    # --- Error si no hay credenciales ---
-    if not creds or not creds.valid:
-        st.error("No se pudieron obtener las credenciales de Google o el token expiró.")
+    # --- En Streamlit Cloud: usar secrets ---
+    elif "gcp_service_account" in st.secrets:
+        service_info = json.loads(st.secrets["gcp_service_account"]["service_account_json"])
+        creds = service_account.Credentials.from_service_account_info(
+            service_info, scopes=SCOPES
+        )
+    else:
+        st.error("❌ No se encontraron credenciales de cuenta de servicio.")
         st.stop()
 
     client = gspread.authorize(creds)
-    st.success("Cliente Google Autorizado ✅")
+    st.success("Cliente Google Autorizado ✅ (Cuenta de Servicio)")
     return client
 
 

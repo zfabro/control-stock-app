@@ -237,31 +237,77 @@ try:
     insumos_cat = materiales_catalogo[materiales_catalogo['tipo'] == 'INSUMO']
 
     tab1, tab2 = st.tabs(["Materias Primas", "Insumos"])
+
+    # ==========================================================
+    # 🧱 TAB 1 - Materias Primas
+    # ==========================================================
     with tab1:
-        st.subheader('Cargar Stock de Materia Prima')
-        opciones_mp = materias_primas_cat['descripcion'].unique().tolist()
-        seleccion_mp = st.selectbox('Seleccione la Materia Prima:', options=opciones_mp, key='mp_select')
-        cantidad_mp = st.number_input('Ingrese la Cantidad en kg:', min_value=0.0, format="%.2f", key='mp_kg')
-        if st.button('Guardar Materia Prima', key='mp_save'):
-            planta_seleccionada = materias_primas_cat[materias_primas_cat['descripcion'] == seleccion_mp].iloc[0]['planta']
-            nuevo_relevamiento = {'material_descripcion': seleccion_mp, 'fecha_hora': datetime.now(), 'cantidad': cantidad_mp, 'planta': planta_seleccionada}
-            guardar_dato_gsheet(gspread_client, nuevo_relevamiento) # Pasamos el cliente
+        st.subheader("Carga Masiva de Materias Primas")
+
+        # Extraemos lista de materias primas del catálogo existente
+        df_materias = materias_primas_cat[['descripcion', 'planta']].copy()
+        df_materias["Cantidad (kg)"] = None
+
+        data_materias = st.data_editor(
+            df_materias,
+            num_rows="fixed",
+            use_container_width=True,
+            key="editor_materias"
+        )
+
+        if st.button("💾 Guardar todas las Materias Primas"):
+            filas_guardadas = 0
+            for _, fila in data_materias.iterrows():
+                if pd.isna(fila["Cantidad (kg)"]) or fila["Cantidad (kg)"] == "":
+                    continue
+
+                nuevo_dato = {
+                    "material_descripcion": fila["descripcion"],
+                    "cantidad": fila["Cantidad (kg)"],
+                    "fecha_hora": datetime.now(),
+                    "planta": fila["planta"],
+                }
+
+                guardar_dato_gsheet(gspread_client, nuevo_dato)
+                filas_guardadas += 1
+
+            st.success(f"✅ Se guardaron {filas_guardadas} materias primas correctamente.")
+
+
+    # ==========================================================
+    # 📦 TAB 2 - Insumos
+    # ==========================================================
     with tab2:
-        st.subheader('Cargar Stock de Insumo')
-        opciones_in = insumos_cat['descripcion'].unique().tolist()
-        seleccion_in = st.selectbox('Seleccione el Insumo:', options=opciones_in, key='in_select')
-        
-        unidad_seleccionada = 'un'
-        planta_seleccionada_in = 'N/A'
-        if seleccion_in:
-            info_df = insumos_cat[insumos_cat['descripcion'] == seleccion_in]
-            if not info_df.empty:
-                unidad_seleccionada = info_df.iloc[0]['unidad']
-                planta_seleccionada_in = info_df.iloc[0]['planta']
-        cantidad_in = st.number_input(f'Ingrese la Cantidad en {unidad_seleccionada}:', min_value=0.0, format="%.2f", key='in_kg')
-        if st.button('Guardar Insumo', key='in_save'):
-            nuevo_relevamiento = {'material_descripcion': seleccion_in, 'fecha_hora': datetime.now(), 'cantidad': cantidad_in, 'planta': planta_seleccionada_in}
-            guardar_dato_gsheet(gspread_client, nuevo_relevamiento) # Pasamos el cliente
+        st.subheader("Carga Masiva de Insumos")
+
+        df_insumos = insumos_cat[['descripcion', 'planta', 'unidad']].copy()
+        df_insumos["Cantidad"] = None
+
+        data_insumos = st.data_editor(
+            df_insumos,
+            num_rows="fixed",
+            use_container_width=True,
+            key="editor_insumos"
+        )
+
+        if st.button("💾 Guardar todos los Insumos"):
+            filas_guardadas = 0
+            for _, fila in data_insumos.iterrows():
+                if pd.isna(fila["Cantidad"]) or fila["Cantidad"] == "":
+                    continue
+
+                nuevo_dato = {
+                    "material_descripcion": fila["descripcion"],
+                    "cantidad": fila["Cantidad"],
+                    "fecha_hora": datetime.now(),
+                    "planta": fila["planta"],
+                }
+
+                guardar_dato_gsheet(gspread_client, nuevo_dato)
+                filas_guardadas += 1
+
+            st.success(f"✅ Se guardaron {filas_guardadas} insumos correctamente.")
+
 
     st.divider()
     st.header('Análisis y Reportes de Stock')

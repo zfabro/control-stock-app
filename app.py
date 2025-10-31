@@ -349,10 +349,17 @@ try:
     material_a_borrar = st.selectbox("Seleccioná el material a eliminar", options=["(Seleccionar)"] + lista_descripciones)
 
     if material_a_borrar != "(Seleccionar)":
+        st.warning(f"⚠️ Vas a eliminar el material: **{material_a_borrar}**. Esta acción no se puede deshacer.")
+        
+        confirmar = st.text_input("Escribí 'ELIMINAR' para confirmar la eliminación:")
+        
         if st.button("Eliminar Material"):
-            materiales_catalogo = materiales_catalogo[materiales_catalogo['descripcion'] != material_a_borrar]
-            st.success(f"🗑️ Material '{material_a_borrar}' eliminado del catálogo.")
-            st.rerun()  # refrescar la app
+            if confirmar.strip().upper() == "ELIMINAR":
+                materiales_catalogo = materiales_catalogo[materiales_catalogo['descripcion'] != material_a_borrar]
+                st.success(f"🗑️ Material '{material_a_borrar}' eliminado correctamente.")
+                st.rerun()
+            else:
+                st.error("❌ Tenés que escribir 'ELIMINAR' para confirmar.")
 
     st.markdown("---")
     st.markdown("### 📋 Catálogo Actualizado")

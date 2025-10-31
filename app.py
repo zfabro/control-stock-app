@@ -236,7 +236,11 @@ try:
     materias_primas_cat = materiales_catalogo[materiales_catalogo['tipo'] == 'MATERIA PRIMA']
     insumos_cat = materiales_catalogo[materiales_catalogo['tipo'] == 'INSUMO']
 
-    tab1, tab2, tab3 = st.tabs(["Materias Primas", "Insumos", "🔧 Gestión de Materiales"])
+    tab1, tab2, tab3, tab4 = st.tabs([
+    "Materias Primas",
+    "Insumos",
+    "🔧 Gestión de Materiales",
+    "📋 Catálogo Actualizado" ])
 
 
     # ==========================================================
@@ -314,6 +318,7 @@ try:
     with tab3:
         st.subheader("🔧 Agregar o Eliminar Materiales del Catálogo")
 
+        # ---- Agregar Material ----
         st.markdown("### ➕ Agregar Nuevo Material")
         with st.form("form_agregar_material"):
             nuevo_codigo = st.text_input("Código del material")
@@ -342,28 +347,32 @@ try:
                 else:
                     st.error("❌ Completá al menos el código y la descripción del material.")
 
-    st.markdown("---")
-    st.markdown("### 🗑️ Eliminar Material Existente")
-
-    lista_descripciones = sorted(materiales_catalogo['descripcion'].unique())
-    material_a_borrar = st.selectbox("Seleccioná el material a eliminar", options=["(Seleccionar)"] + lista_descripciones)
-
-    if material_a_borrar != "(Seleccionar)":
-        st.warning(f"⚠️ Vas a eliminar el material: **{material_a_borrar}**. Esta acción no se puede deshacer.")
+        st.markdown("---")
         
-        confirmar = st.text_input("Escribí 'ELIMINAR' para confirmar la eliminación:")
-        
-        if st.button("Eliminar Material"):
-            if confirmar.strip().upper() == "ELIMINAR":
-                materiales_catalogo = materiales_catalogo[materiales_catalogo['descripcion'] != material_a_borrar]
-                st.success(f"🗑️ Material '{material_a_borrar}' eliminado correctamente.")
-                st.rerun()
-            else:
-                st.error("❌ Tenés que escribir 'ELIMINAR' para confirmar.")
+        # ---- Eliminar Material ----
+        st.markdown("### 🗑️ Eliminar Material Existente")
+        lista_descripciones = sorted(materiales_catalogo['descripcion'].unique())
+        material_a_borrar = st.selectbox("Seleccioná el material a eliminar", options=["(Seleccionar)"] + lista_descripciones)
 
-    st.markdown("---")
-    st.markdown("### 📋 Catálogo Actualizado")
-    st.dataframe(materiales_catalogo, use_container_width=True)
+        if material_a_borrar != "(Seleccionar)":
+            st.warning(f"⚠️ Vas a eliminar el material: **{material_a_borrar}**. Esta acción no se puede deshacer.")
+            
+            confirmar = st.text_input("Escribí 'ELIMINAR' para confirmar la eliminación:")
+            
+            if st.button("Eliminar Material"):
+                if confirmar.strip().upper() == "ELIMINAR":
+                    materiales_catalogo = materiales_catalogo[materiales_catalogo['descripcion'] != material_a_borrar]
+                    st.success(f"🗑️ Material '{material_a_borrar}' eliminado correctamente.")
+                    st.rerun()
+                else:
+                    st.error("❌ Tenés que escribir 'ELIMINAR' para confirmar.")
+
+    # ==========================================================
+    # 📋 TAB 4 - Catálogo Actualizado
+    # ==========================================================
+    with tab4:
+        st.subheader("📋 Catálogo Actualizado de Materiales")
+        st.dataframe(materiales_catalogo, use_container_width=True)
 
 
     st.divider()

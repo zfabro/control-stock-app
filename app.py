@@ -236,7 +236,8 @@ try:
     materias_primas_cat = materiales_catalogo[materiales_catalogo['tipo'] == 'MATERIA PRIMA']
     insumos_cat = materiales_catalogo[materiales_catalogo['tipo'] == 'INSUMO']
 
-    tab1, tab2 = st.tabs(["Materias Primas", "Insumos"])
+    tab1, tab2, tab3 = st.tabs(["Materias Primas", "Insumos", "🔧 Gestión de Materiales"])
+
 
     # ==========================================================
     # 🧱 TAB 1 - Materias Primas
@@ -307,6 +308,55 @@ try:
                 filas_guardadas += 1
 
             st.success(f"✅ Se guardaron {filas_guardadas} insumos correctamente.")
+    # ==========================================================
+    # ⚙️ TAB 3 - Gestión de Materiales
+    # ==========================================================
+    with tab3:
+        st.subheader("🔧 Agregar o Eliminar Materiales del Catálogo")
+
+        st.markdown("### ➕ Agregar Nuevo Material")
+        with st.form("form_agregar_material"):
+            nuevo_codigo = st.text_input("Código del material")
+            nueva_descripcion = st.text_input("Descripción")
+            nuevo_tipo = st.selectbox("Tipo", ["MATERIA PRIMA", "INSUMO"])
+            nueva_unidad = st.text_input("Unidad (kg, litros, un, etc.)")
+            nueva_planta = st.selectbox("Planta", sorted(materiales_catalogo['planta'].unique()))
+
+            submitted_agregar = st.form_submit_button("Agregar Material")
+
+            if submitted_agregar:
+                if nuevo_codigo and nueva_descripcion:
+                    nuevo_material = {
+                        'codigo': nuevo_codigo.strip(),
+                        'descripcion': nueva_descripcion.strip(),
+                        'tipo': nuevo_tipo,
+                        'unidad': nueva_unidad.strip() if nueva_unidad else 'N/A',
+                        'planta': nueva_planta
+                    }
+                    # Verificar si ya existe
+                    if nuevo_codigo in materiales_catalogo['codigo'].values:
+                        st.warning("⚠️ Ya existe un material con ese código.")
+                    else:
+                        materiales_catalogo.loc[len(materiales_catalogo)] = nuevo_material
+                        st.success(f"✅ Material '{nueva_descripcion}' agregado correctamente.")
+                else:
+                    st.error("❌ Completá al menos el código y la descripción del material.")
+
+    st.markdown("---")
+    st.markdown("### 🗑️ Eliminar Material Existente")
+
+    lista_descripciones = sorted(materiales_catalogo['descripcion'].unique())
+    material_a_borrar = st.selectbox("Seleccioná el material a eliminar", options=["(Seleccionar)"] + lista_descripciones)
+
+    if material_a_borrar != "(Seleccionar)":
+        if st.button("Eliminar Material"):
+            materiales_catalogo = materiales_catalogo[materiales_catalogo['descripcion'] != material_a_borrar]
+            st.success(f"🗑️ Material '{material_a_borrar}' eliminado del catálogo.")
+            st.rerun()  # refrescar la app
+
+    st.markdown("---")
+    st.markdown("### 📋 Catálogo Actualizado")
+    st.dataframe(materiales_catalogo, use_container_width=True)
 
 
     st.divider()

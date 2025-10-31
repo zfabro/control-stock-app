@@ -350,7 +350,7 @@ try:
         st.markdown("---")
         
         # ---- Eliminar Material ----
-        st.markdown("### 🗑️ Eliminar Material Existente")
+        st.markdown("### 🗑️ Eliminar Material del Catalogo(no elimina dato cargado)")
         lista_descripciones = sorted(materiales_catalogo['descripcion'].unique())
         material_a_borrar = st.selectbox("Seleccioná el material a eliminar", options=["(Seleccionar)"] + lista_descripciones)
 

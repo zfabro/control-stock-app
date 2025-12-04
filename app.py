@@ -231,89 +231,88 @@ try:
 
     # Código completo corregido
 
-    # --- TAB 1: Materias Primas (Corregido) ---
-    with tab1:
-        st.subheader("Carga Masiva de Materias Primas")
-        materias_primas_cat = materiales_catalogo[materiales_catalogo['tipo'] == 'MATERIA PRIMA']
+    # --- TAB 1: MATERIA PRIMA ---
 
-        df_materias = materias_primas_cat[['descripcion', 'planta']].copy()
-        df_materias['Cantidad (kg)'] = None
+    def tab1_materia_prima(st, df_materia, save_to_sheet_materia):
+        st.header("📦 Carga de Materia Prima")
 
-        data_materias = st.data_editor(
-            df_materias,
-            num_rows="fixed",
-            use_container_width=True,
-            key="editor_materias"
-        )
+        # --- Formulario para ingresar varias materias primas ---
+        materias = []
+        cantidad_items = st.number_input("Cantidad de materias primas a cargar", min_value=1, value=1, step=1)
 
-        if st.button("💾 Guardar todas las Materias Primas"):
-            filas_guardadas = 0
+        for i in range(cantidad_items):
+            st.subheader(f"Materia Prima #{i+1}")
+            nombre = st.text_input(f"Nombre MP #{i+1}")
+            cantidad = st.number_input(f"Cantidad MP #{i+1}", min_value=0.0, step=0.01)
+            unidad = st.selectbox(f"Unidad MP #{i+1}", ["kg", "litros", "unidades", "metros", "cm"], key=f"unidad_{i}")
+            fecha = st.date_input(f"Fecha MP #{i+1}")
 
-            for _, fila in data_materias.iterrows():
-                cantidad = fila["Cantidad (kg)"]
-                if pd.isna(cantidad) or cantidad == "":
-                    continue
+            materias.append({
+                "Nombre": nombre,
+                "Cantidad": cantidad,
+                "Unidad": unidad,
+                "Fecha": fecha.strftime("%d/%m/%Y")
+            })
 
-                try:
-                    cantidad = float(cantidad)
-                except:
-                    st.error(f"Valor inválido en {fila['descripcion']}: {cantidad}")
-                    continue
+        # --- Botón Guardar ---
+        if st.button("Guardar Materias Primas"):
+            for item in materias:
+                save_to_sheet_materia(item)
+            st.success("Materia Prima guardada correctamente ✨")
 
-                nuevo_dato = {
-                    "material_descripcion": fila["descripcion"],
-                    "cantidad": cantidad,
-                    "fecha_hora": datetime.now(),
-                    "planta": fila["planta"]
-                }
+        # --- Historial ---
+        st.subheader("📜 Historial de Materias Primas")
+        st.dataframe(df_materia)
 
-                guardar_dato_gsheet(gspread_client, nuevo_dato, rerun=False)
-                filas_guardadas += 1
+        # --- Reporte Predictivo ---
+        st.subheader("📈 Reporte Predictivo")
+        if not df_materia.empty:
+            df_materia['Cantidad'] = df_materia['Cantidad'].astype(float)
+            resumen = df_materia.groupby('Nombre')['Cantidad'].sum().reset_index()
+            st.bar_chart(resumen.set_index('Nombre'))
+        else:
+            st.info("Aún no hay datos para generar un reporte predictivo.")
 
-            st.success(f"✅ Se guardaron {filas_guardadas} materias primas correctamente.")
 
-    # --- TAB 2: Insumos (Corregido) ---
-    with tab2:
-        st.subheader("Carga Masiva de Insumos")
+    # --- TAB 2: INSUMOS ---
 
-        insumos_cat = materiales_catalogo[materiales_catalogo['tipo'] == 'INSUMO']
-        df_insumos = insumos_cat[['descripcion', 'planta', 'unidad']].copy()
-        df_insumos['Cantidad'] = None
+    def tab2_insumos(st, df_insumos, save_to_sheet_insumos):
+        st.header("🛠️ Carga de Insumos")
 
-        data_insumos = st.data_editor(
-            df_insumos,
-            num_rows="fixed",
-            use_container_width=True,
-            key="editor_insumos"
-        )
+        insumos = []
+        cantidad_items = st.number_input("Cantidad de insumos a cargar", min_value=1, value=1, step=1, key="cant_insumos")
 
-        if st.button("💾 Guardar todos los Insumos"):
-            filas_guardadas = 0
+        for i in range(cantidad_items):
+            st.subheader(f"Insumo #{i+1}")
+            nombre = st.text_input(f"Nombre Insumo #{i+1}", key=f"nom_ins_{i}")
+            cantidad = st.number_input(f"Cantidad Insumo #{i+1}", min_value=0.0, step=0.01, key=f"cant_ins_{i}")
+            unidad = st.selectbox(f"Unidad Insumo #{i+1}", ["kg", "litros", "unidades", "metros", "cm"], key=f"unidad_ins_{i}")
+            fecha = st.date_input(f"Fecha Insumo #{i+1}", key=f"fecha_ins_{i}")
 
-            for _, fila in data_insumos.iterrows():
-                cantidad = fila["Cantidad"]
+            insumos.append({
+                "Nombre": nombre,
+                "Cantidad": cantidad,
+                "Unidad": unidad,
+                "Fecha": fecha.strftime("%d/%m/%Y")
+            })
 
-                if pd.isna(cantidad) or cantidad == "":
-                    continue
+        if st.button("Guardar Insumos"):
+            for item in insumos:
+                save_to_sheet_insumos(item)
+            st.success("Insumos guardados correctamente ✨")
 
-                try:
-                    cantidad = float(cantidad)
-                except:
-                    st.error(f"Valor inválido en {fila['descripcion']}: {cantidad}")
-                    continue
+        # --- Historial ---
+        st.subheader("📜 Historial de Insumos")
+        st.dataframe(df_insumos)
 
-                nuevo_dato = {
-                    "material_descripcion": fila["descripcion"],
-                    "cantidad": cantidad,
-                    "fecha_hora": datetime.now(),
-                    "planta": fila["planta"]
-                }
-
-                guardar_dato_gsheet(gspread_client, nuevo_dato, rerun=False)
-                filas_guardadas += 1
-
-            st.success(f"✅ Se guardaron {filas_guardadas} insumos correctamente.")
-    # (placeholder, will add full code next)
+        # --- Reporte Predictivo ---
+        st.subheader("📈 Reporte Predictivo")
+        if not df_insumos.empty:
+            df_insumos['Cantidad'] = df_insumos['Cantidad'].astype(float)
+            resumen = df_insumos.groupby('Nombre')['Cantidad'].sum().reset_index()
+            st.bar_chart(resumen.set_index('Nombre'))
+        else:
+            st.info("Aún no hay datos para generar un reporte.")
 
 
     # --- TAB 3: Gestión de Materiales ---

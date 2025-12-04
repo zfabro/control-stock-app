@@ -71,64 +71,40 @@ def cargar_y_procesar_datos(client):
         st.warning(f"Datos cargados, pero podrían faltar columnas requeridas ({required_cols_db}) o tener formato inesperado.")
     return df
 
-def guardar_dato_gsheet(client, nuevo_dato, rerun: bool = False):
+def guardar_dato_gsheet(client, nuevo_dato):
     if client is None:
         st.error("Error de conexión, no se pudo guardar el dato.")
         return
 
-    # --- Armar la cantidad ---
-    cantidad = nuevo_dato.get("cantidad")
-
-    # Si viene como lista desde el data_editor
-    if isinstance(cantidad, list):
-        if len(cantidad) > 0:
-            cantidad = cantidad[0]
-        else:
-            st.error("Cantidad inválida (lista vacía)")
-            return
-
-    # Convertir a float seguro
-    try:
-        cantidad = float(cantidad)
-    except Exception:
-        st.error(f"Cantidad inválida: {cantidad}")
-        return
-
-    # Fila final para Google Sheets
     fila = [
-        str(nuevo_dato.get('material_descripcion', '')),
-        nuevo_dato.get('fecha_hora').strftime("%d/%m/%Y %H:%M:%S"),
-        cantidad,
-        str(nuevo_dato.get('planta', ''))
+        str(nuevo_dato['material_descripcion']),
+        nuevo_dato['fecha_hora'].strftime("%d/%m/%Y %H:%M:%S"),
+        float(nuevo_dato['cantidad']),
+        str(nuevo_dato['planta'])
     ]
-
     try:
         sheet = client.open("Base de Datos Fábrica").sheet1
         sheet.append_row(fila)
-
-        # Opcional: solo hacer rerun si se pide explícitamente
-        if rerun:
-            st.cache_resource.clear()
-            time.sleep(1)
-            st.rerun()
-
+        st.success(f"¡Guardado! Actualizando vista...")
+        st.cache_resource.clear()
+        time.sleep(1.5)
+        st.rerun()
     except Exception as e:
         st.error(f"Error al guardar en Google Sheets: {e}")
 
-
-    def calcular_consumo_diario(df_historial):
-        if len(df_historial) < 2:
-            return 0
-        df = df_historial.sort_values('fecha_hora').copy()
-        df['cantidad'] = pd.to_numeric(df['cantidad'], errors='coerce')
-        df = df.dropna(subset=['cantidad'])
-        if len(df) < 2: return 0
-        df['Consumo'] = df['cantidad'].diff(-1) * -1
-        df['Dias'] = df['fecha_hora'].diff(-1).dt.total_seconds().abs() / (24 * 3600)
-        df_consumo = df[df['Consumo'] > 0]
-        if df_consumo.empty or df_consumo['Dias'].sum() == 0:
-            return 0
-        return df_consumo['Consumo'].sum() / df_consumo['Dias'].sum()
+def calcular_consumo_diario(df_historial):
+    if len(df_historial) < 2:
+        return 0
+    df = df_historial.sort_values('fecha_hora').copy()
+    df['cantidad'] = pd.to_numeric(df['cantidad'], errors='coerce')
+    df = df.dropna(subset=['cantidad'])
+    if len(df) < 2: return 0
+    df['Consumo'] = df['cantidad'].diff(-1) * -1
+    df['Dias'] = df['fecha_hora'].diff(-1).dt.total_seconds().abs() / (24 * 3600)
+    df_consumo = df[df['Consumo'] > 0]
+    if df_consumo.empty or df_consumo['Dias'].sum() == 0:
+        return 0
+    return df_consumo['Consumo'].sum() / df_consumo['Dias'].sum()
 
 # --- Catálogo Completo ---
 materiales_catalogo = pd.DataFrame([
@@ -229,203 +205,128 @@ try:
         "📋 Catálogo Actualizado"
     ])
 
-    # Código completo corregido
-
-    # --- TAB 1: Materias Primas (Corregido) ---
-    # --- TAB 1: Materias Primas (Con Reporte Predictivo + Alertas + Historial en orden correcto) ---
+    # --- TAB 1: Materias Primas ---
     with tab1:
         st.subheader("Carga Masiva de Materias Primas")
-
-        materias_primas_cat = materiales_catalogo[materiales_catalogo['tipo'] == 'MATERIA PRIMA']
-
-        df_materias = materias_primas_cat[['descripcion', 'planta']].copy()
+        materias_primas_cat = materiales_catalogo[materiales_catalogo['tipo']=='MATERIA PRIMA']
+        df_materias = materias_primas_cat[['descripcion','planta']].copy()
         df_materias['Cantidad (kg)'] = None
 
-        data_materias = st.data_editor(
-            df_materias,
-            num_rows="fixed",
-            use_container_width=True,
-            key="editor_materias"
-        )
-
+        data_materias = st.data_editor(df_materias, num_rows="fixed", use_container_width=True, key="editor_materias")
         if st.button("💾 Guardar todas las Materias Primas"):
             filas_guardadas = 0
-
             for _, fila in data_materias.iterrows():
-
-                cantidad = fila["Cantidad (kg)"]
-                if isinstance(cantidad, list):
-                    cantidad = cantidad[0] if len(cantidad) > 0 else None
-
-                if cantidad is None or pd.isna(cantidad) or str(cantidad).strip() == "":
+                if pd.isna(fila["Cantidad (kg)"]) or fila["Cantidad (kg)"] == "":
                     continue
-
-                try:
-                    cantidad = float(cantidad)
-                except:
-                    st.error(f"Valor inválido en {fila['descripcion']}: {cantidad}")
-                    continue
-
                 nuevo_dato = {
                     "material_descripcion": fila["descripcion"],
-                    "cantidad": cantidad,
+                    "cantidad": fila["Cantidad (kg)"],
                     "fecha_hora": datetime.now(),
                     "planta": fila["planta"]
                 }
-
-                guardar_dato_gsheet(gspread_client, nuevo_dato, rerun=False)
+                guardar_dato_gsheet(gspread_client, nuevo_dato)
                 filas_guardadas += 1
-
             st.success(f"✅ Se guardaron {filas_guardadas} materias primas correctamente.")
 
-        # --- REPORTE PREDICTIVO ---
-        st.subheader("📊 Reporte Predictivo de Stock")
+        # --- Reporte y Alertas Materias Primas ---
+        st.subheader("📊 Reportes Predictivos y Alertas")
         df_stock = cargar_y_procesar_datos(gspread_client)
-
         if not df_stock.empty:
             reporte_mp = []
             for desc in materias_primas_cat['descripcion']:
-                df_hist = df_stock[df_stock['material_codigo'] == desc]
+                df_hist = df_stock[df_stock['material_codigo']==desc]
                 ultimo_stock = df_hist['cantidad'].iloc[-1] if not df_hist.empty else 0
                 consumo = calcular_consumo_diario(df_hist)
-                dias_rest = ultimo_stock / consumo if consumo > 0 else np.inf
-                fecha_agot = (datetime.now() + timedelta(days=dias_rest)).strftime('%Y-%m-%d') if dias_rest != np.inf else "Sin Consumo"
-
-                row_cat = materias_primas_cat[materias_primas_cat['descripcion'] == desc].iloc[0]
-
+                dias_rest = ultimo_stock/consumo if consumo>0 else np.inf
+                fecha_agot = (datetime.now()+timedelta(days=dias_rest)).strftime('%Y-%m-%d') if dias_rest!=np.inf else "Sin Consumo"
+                row_cat = materias_primas_cat[materias_primas_cat['descripcion']==desc].iloc[0]
                 reporte_mp.append({
+                    'Código': row_cat['codigo'],
                     'Descripción': desc,
                     'Planta': row_cat['planta'],
                     'Último Stock': ultimo_stock,
                     'Unidad': row_cat['unidad'],
-                    'Consumo Diario Prom.': round(consumo, 2),
+                    'Consumo Diario Prom.': round(consumo,2),
                     'Días Restantes': dias_rest,
                     'Fecha Agotamiento': fecha_agot
                 })
-
             df_reporte_mp = pd.DataFrame(reporte_mp)
             df_display = df_reporte_mp.copy()
-            df_display['Días Restantes'] = df_display['Días Restantes'].apply(lambda x: "Sin Consumo" if x == np.inf else round(x, 1))
+            df_display['Días Restantes'] = df_display['Días Restantes'].apply(lambda x: "Sin Consumo" if x==np.inf else round(x,1))
+            st.dataframe(df_display)
 
-            st.dataframe(df_display, use_container_width=True)
-
-            # --- ALERTAS ---
-            st.subheader("⚠️ Alertas de Stock Bajo")
-
-            alertas = df_display[df_display['Días Restantes'] != "Sin Consumo"]
-            alertas = alertas[alertas['Días Restantes'] <= 15]
-
+            alertas = df_display[df_display['Días Restantes']!="Sin Consumo"]
+            alertas = alertas[alertas['Días Restantes']<=15]
             if not alertas.empty:
-                st.warning("⚠️ Materiales con stock crítico (< 15 días)")
-                st.dataframe(alertas[['Descripción', 'Planta', 'Días Restantes', 'Unidad']], use_container_width=True)
-            else:
-                st.info("No hay alertas de stock bajo.")
+                st.warning("⚠️ Alertas de Stock Bajo")
+                st.dataframe(alertas[['Código','Descripción','Planta','Días Restantes','Unidad']])
 
-        # --- HISTORIAL ---
-        st.subheader("📖 Historial de Cargas")
+        st.subheader("📖 Historial")
         if not df_stock.empty:
-            st.dataframe(
-                df_stock[df_stock['material_codigo'].isin(materias_primas_cat['descripcion'])]
-                .sort_values('fecha_hora', ascending=False),
-                use_container_width=True
-            )
+            st.dataframe(df_stock[df_stock['material_codigo'].isin(materias_primas_cat['descripcion'])].sort_values('fecha_hora',ascending=False))
         else:
             st.info("Aún no se han cargado datos en la hoja de cálculo.")
 
-
-    # --- TAB 2: Insumos (Con Reporte Predictivo + Alertas + Historial en orden correcto) ---
+    # --- TAB 2: Insumos ---
     with tab2:
         st.subheader("Carga Masiva de Insumos")
-
-        insumos_cat = materiales_catalogo[materiales_catalogo['tipo'] == 'INSUMO']
-
-        df_insumos = insumos_cat[['descripcion', 'planta', 'unidad']].copy()
+        insumos_cat = materiales_catalogo[materiales_catalogo['tipo']=='INSUMO']
+        df_insumos = insumos_cat[['descripcion','planta','unidad']].copy()
         df_insumos['Cantidad'] = None
-
-        data_insumos = st.data_editor(
-            df_insumos,
-            num_rows="fixed",
-            use_container_width=True,
-            key="editor_insumos"
-        )
-
+        data_insumos = st.data_editor(df_insumos, num_rows="fixed", use_container_width=True, key="editor_insumos")
         if st.button("💾 Guardar todos los Insumos"):
             filas_guardadas = 0
-
             for _, fila in data_insumos.iterrows():
-                cantidad = fila["Cantidad"]
-
-                if isinstance(cantidad, list):
-                    cantidad = cantidad[0] if len(cantidad) > 0 else None
-
-                if cantidad is None or pd.isna(cantidad) or str(cantidad).strip() == "":
+                if pd.isna(fila["Cantidad"]) or fila["Cantidad"] == "":
                     continue
-
-                try:
-                    cantidad = float(cantidad)
-                except:
-                    st.error(f"Valor inválido en {fila['descripcion']}: {cantidad}")
-                    continue
-
                 nuevo_dato = {
                     "material_descripcion": fila["descripcion"],
-                    "cantidad": cantidad,
+                    "cantidad": fila["Cantidad"],
                     "fecha_hora": datetime.now(),
                     "planta": fila["planta"]
                 }
-
-                guardar_dato_gsheet(gspread_client, nuevo_dato, rerun=False)
+                guardar_dato_gsheet(gspread_client, nuevo_dato)
                 filas_guardadas += 1
-
             st.success(f"✅ Se guardaron {filas_guardadas} insumos correctamente.")
 
-
-        # --- REPORTE PREDICTIVO ---
-        st.subheader("📊 Reporte Predictivo de Stock")
+        # --- Reporte y Alertas Insumos ---
+        st.subheader("📊 Reportes Predictivos y Alertas")
         df_stock = cargar_y_procesar_datos(gspread_client)
-
         if not df_stock.empty:
             reporte_ins = []
             for desc in insumos_cat['descripcion']:
-                df_hist = df_stock[df_stock['material_codigo'] == desc]
+                df_hist = df_stock[df_stock['material_codigo']==desc]
                 ultimo_stock = df_hist['cantidad'].iloc[-1] if not df_hist.empty else 0
                 consumo = calcular_consumo_diario(df_hist)
-                dias_rest = ultimo_stock / consumo if consumo > 0 else np.inf
-                fecha_agot = (datetime.now() + timedelta(days=dias_rest)).strftime('%Y-%m-%d') if dias_rest != np.inf else "Sin Consumo"
-
-                row_cat = insumos_cat[insumos_cat['descripcion'] == desc].iloc[0]
-
+                dias_rest = ultimo_stock/consumo if consumo>0 else np.inf
+                fecha_agot = (datetime.now()+timedelta(days=dias_rest)).strftime('%Y-%m-%d') if dias_rest!=np.inf else "Sin Consumo"
+                row_cat = insumos_cat[insumos_cat['descripcion']==desc].iloc[0]
                 reporte_ins.append({
+                    'Código': row_cat['codigo'],
                     'Descripción': desc,
                     'Planta': row_cat['planta'],
                     'Último Stock': ultimo_stock,
                     'Unidad': row_cat['unidad'],
-                    'Consumo Diario Prom.': round(consumo, 2),
+                    'Consumo Diario Prom.': round(consumo,2),
                     'Días Restantes': dias_rest,
                     'Fecha Agotamiento': fecha_agot
                 })
-
             df_reporte_ins = pd.DataFrame(reporte_ins)
             df_display = df_reporte_ins.copy()
-            df_display['Días Restantes'] = df_display['Días Restantes'].apply(lambda x: "Sin Consumo" if x == np.inf else round(x,1))
+            df_display['Días Restantes'] = df_display['Días Restantes'].apply(lambda x: "Sin Consumo" if x==np.inf else round(x,1))
+            st.dataframe(df_display)
 
-            st.dataframe(df_display, use_container_width=True)
-
-            # --- ALERTAS ---
-            st.subheader("⚠️ Alertas de Stock Bajo")
-
-            alertas = df_display[df_display['Días Restantes'] != "Sin Consumo"]
-            alertas = alertas[alertas['Días Restantes'] <= 30]
-
+            alertas = df_display[df_display['Días Restantes']!="Sin Consumo"]
+            alertas = alertas[alertas['Días Restantes']<=30]
             if not alertas.empty:
-                st.warning("⚠️ Insumos con stock crítico (< 30 días)")
-                st.dataframe(alertas[['Descripción','Planta','Días Restantes','Unidad']], use_container_width=True)
-            else:
-                st.info("No hay alertas de stock bajo.")
+                st.warning("⚠️ Alertas de Stock Bajo")
+                st.dataframe(alertas[['Código','Descripción','Planta','Días Restantes','Unidad']])
 
-        # --- HISTORIAL ---
-        st.sub
-
+        st.subheader("📖 Historial")
+        if not df_stock.empty:
+            st.dataframe(df_stock[df_stock['material_codigo'].isin(insumos_cat['descripcion'])].sort_values('fecha_hora',ascending=False))
+        else:
+            st.info("Aún no se han cargado datos en la hoja de cálculo.")
 
     # --- TAB 3: Gestión de Materiales ---
     with tab3:

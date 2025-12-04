@@ -73,14 +73,19 @@ def cargar_y_procesar_datos(client):
 
 def guardar_dato_gsheet(client, nuevo_dato):
     if client is None:
-        st.error("Error de conexión, no se pudo guardar el dato.")
+        st.error("Error de conexión, no se pudo guardar el dato (client=None).")
         return
 
     # --- Arreglar cantidad ---
     cantidad = nuevo_dato['cantidad']
     if isinstance(cantidad, list):
         cantidad = cantidad[0]
-    cantidad = float(cantidad)
+
+    try:
+        cantidad = float(cantidad)
+    except Exception as e:
+        st.error(f"Error convirtiendo cantidad a número: {repr(e)}")
+        return
 
     fila = [
         str(nuevo_dato['material_descripcion']),
@@ -89,15 +94,28 @@ def guardar_dato_gsheet(client, nuevo_dato):
         str(nuevo_dato['planta'])
     ]
 
+    # ------ DEBUG ------
+    st.write("DEBUG - Fila a guardar:", fila)
+    st.write("DEBUG - Tipo de cliente:", type(client))
+
     try:
         sheet = client.open("Base de Datos Fábrica").sheet1
-        sheet.append_row(fila)
+    except Exception as e:
+        st.error(f"ERROR abriendo la hoja: {repr(e)}")
+        return
+
+    # ------ Intento real de escritura ------
+    try:
+        result = sheet.append_row(fila, value_input_option="RAW")
+        st.write("DEBUG - Resultado append_row:", result)
         st.success("¡Guardado! Actualizando vista...")
         st.cache_resource.clear()
         time.sleep(1.5)
         st.rerun()
+
     except Exception as e:
-        st.error(f"Error al guardar en Google Sheets: {e}")
+        st.error(f"ERROR REAL al escribir en Google Sheets: {repr(e)}")
+
 
 
 def calcular_consumo_diario(df_historial):

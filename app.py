@@ -76,21 +76,29 @@ def guardar_dato_gsheet(client, nuevo_dato):
         st.error("Error de conexión, no se pudo guardar el dato.")
         return
 
+    # --- Arreglar cantidad ---
+    cantidad = nuevo_dato['cantidad']
+    if isinstance(cantidad, list):
+        cantidad = cantidad[0]
+    cantidad = float(cantidad)
+
     fila = [
         str(nuevo_dato['material_descripcion']),
         nuevo_dato['fecha_hora'].strftime("%d/%m/%Y %H:%M:%S"),
-        float(nuevo_dato['cantidad']),
+        cantidad,
         str(nuevo_dato['planta'])
     ]
+
     try:
         sheet = client.open("Base de Datos Fábrica").sheet1
         sheet.append_row(fila)
-        st.success(f"¡Guardado! Actualizando vista...")
+        st.success("¡Guardado! Actualizando vista...")
         st.cache_resource.clear()
         time.sleep(1.5)
         st.rerun()
     except Exception as e:
         st.error(f"Error al guardar en Google Sheets: {e}")
+
 
 def calcular_consumo_diario(df_historial):
     if len(df_historial) < 2:
@@ -272,7 +280,6 @@ try:
         st.subheader("Carga Masiva de Insumos")
         insumos_cat = materiales_catalogo[materiales_catalogo['tipo']=='INSUMO']
         df_insumos = insumos_cat[['descripcion','planta','unidad']].copy()
-        df_insumos['Cantidad'] = None
         data_insumos = st.data_editor(df_insumos, num_rows="fixed", use_container_width=True, key="editor_insumos")
         if st.button("💾 Guardar todos los Insumos"):
             filas_guardadas = 0

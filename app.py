@@ -76,21 +76,32 @@ def guardar_dato_gsheet(client, nuevo_dato):
         st.error("Error de conexión, no se pudo guardar el dato.")
         return
 
-    fila = [
-        str(nuevo_dato['material_descripcion']),
-        nuevo_dato['fecha_hora'].strftime("%d/%m/%Y %H:%M:%S"),
-        float(nuevo_dato['cantidad']),
-        str(nuevo_dato['planta'])
-    ]
     try:
+        # --- CORRECCIÓN AQUÍ: Sanitizar el dato de cantidad ---
+        cantidad_raw = nuevo_dato['cantidad']
+        
+        # Si por error llega una lista (ej: [50]), tomamos el primer valor
+        if isinstance(cantidad_raw, list):
+            cantidad_final = float(cantidad_raw[0])
+        else:
+            cantidad_final = float(cantidad_raw)
+            
+        fila = [
+            str(nuevo_dato['material_descripcion']),
+            nuevo_dato['fecha_hora'].strftime("%d/%m/%Y %H:%M:%S"),
+            cantidad_final,
+            str(nuevo_dato['planta'])
+        ]
+        
         sheet = client.open("Base de Datos Fábrica").sheet1
         sheet.append_row(fila)
         st.success(f"¡Guardado! Actualizando vista...")
         st.cache_resource.clear()
         time.sleep(1.5)
         st.rerun()
+        
     except Exception as e:
-        st.error(f"Error al guardar en Google Sheets: {e}")
+        st.error(f"Error al procesar o guardar los datos: {e}")
 
 def calcular_consumo_diario(df_historial):
     if len(df_historial) < 2:
@@ -205,19 +216,38 @@ try:
         "📋 Catálogo Actualizado"
     ])
 
-    # --- TAB 1: Materias Primas ---
+# --- TAB 1: Materias Primas ---
     with tab1:
         st.subheader("Carga Masiva de Materias Primas")
         materias_primas_cat = materiales_catalogo[materiales_catalogo['tipo']=='MATERIA PRIMA']
         df_materias = materias_primas_cat[['descripcion','planta']].copy()
         df_materias['Cantidad (kg)'] = None
 
-        data_materias = st.data_editor(df_materias, num_rows="fixed", use_container_width=True, key="editor_materias")
+        # --- AQUÍ ESTÁ EL ARREGLO ---
+        # Configuramos la columna para asegurar que sea numérica
+        data_materias = st.data_editor(
+            df_materias, 
+            num_rows="fixed", 
+            use_container_width=True, 
+            key="editor_materias",
+            column_config={
+                "Cantidad (kg)": st.column_config.NumberColumn(
+                    "Cantidad (kg)",
+                    help="Ingresá la cantidad en kg",
+                    min_value=0,
+                    step=0.1,
+                    format="%.2f"
+                )
+            }
+        )
+        
         if st.button("💾 Guardar todas las Materias Primas"):
             filas_guardadas = 0
             for _, fila in data_materias.iterrows():
+                # Verificamos que no esté vacío (None o NaN)
                 if pd.isna(fila["Cantidad (kg)"]) or fila["Cantidad (kg)"] == "":
                     continue
+                
                 nuevo_dato = {
                     "material_descripcion": fila["descripcion"],
                     "cantidad": fila["Cantidad (kg)"],
@@ -226,7 +256,8 @@ try:
                 }
                 guardar_dato_gsheet(gspread_client, nuevo_dato)
                 filas_guardadas += 1
-            st.success(f"✅ Se guardaron {filas_guardadas} materias primas correctamente.")
+            if filas_guardadas > 0:
+                st.success(f"✅ Se guardaron {filas_guardadas} materias primas correctamente.")
 
         # --- Reporte y Alertas Materias Primas ---
         st.subheader("📊 Reportes Predictivos y Alertas")
@@ -256,10 +287,16 @@ try:
             st.dataframe(df_display)
 
             alertas = df_display[df_display['Días Restantes']!="Sin Consumo"]
-            alertas = alertas[alertas['Días Restantes']<=15]
-            if not alertas.empty:
+            # Filtramos alertas (ej: menos de 15 días)
+            alertas = alertas[alertas['Días Restantes']!= "Sin Consumo"] 
+            # Nota: el filtro anterior dejaba pasar strings, aseguramos comparacion numerica en la logica:
+            # Simplificamos la alerta visual para evitar errores de tipo si "Sin Consumo" sigue ahi
+            alertas_num = df_reporte_mp[df_reporte_mp['Días Restantes'] != np.inf].copy()
+            alertas_num = alertas_num[alertas_num['Días Restantes'] <= 15]
+            
+            if not alertas_num.empty:
                 st.warning("⚠️ Alertas de Stock Bajo")
-                st.dataframe(alertas[['Código','Descripción','Planta','Días Restantes','Unidad']])
+                st.dataframe(alertas_num[['Código','Descripción','Planta','Días Restantes','Unidad']])
 
         st.subheader("📖 Historial")
         if not df_stock.empty:
@@ -267,13 +304,30 @@ try:
         else:
             st.info("Aún no se han cargado datos en la hoja de cálculo.")
 
-    # --- TAB 2: Insumos ---
+# --- TAB 2: Insumos ---
     with tab2:
         st.subheader("Carga Masiva de Insumos")
         insumos_cat = materiales_catalogo[materiales_catalogo['tipo']=='INSUMO']
         df_insumos = insumos_cat[['descripcion','planta','unidad']].copy()
         df_insumos['Cantidad'] = None
-        data_insumos = st.data_editor(df_insumos, num_rows="fixed", use_container_width=True, key="editor_insumos")
+        
+        # --- AQUÍ ESTÁ EL ARREGLO ---
+        data_insumos = st.data_editor(
+            df_insumos, 
+            num_rows="fixed", 
+            use_container_width=True, 
+            key="editor_insumos",
+            column_config={
+                "Cantidad": st.column_config.NumberColumn(
+                    "Cantidad",
+                    help="Ingresá la cantidad",
+                    min_value=0,
+                    step=1,
+                    format="%d"
+                )
+            }
+        )
+        
         if st.button("💾 Guardar todos los Insumos"):
             filas_guardadas = 0
             for _, fila in data_insumos.iterrows():
@@ -287,7 +341,8 @@ try:
                 }
                 guardar_dato_gsheet(gspread_client, nuevo_dato)
                 filas_guardadas += 1
-            st.success(f"✅ Se guardaron {filas_guardadas} insumos correctamente.")
+            if filas_guardadas > 0:
+                st.success(f"✅ Se guardaron {filas_guardadas} insumos correctamente.")
 
         # --- Reporte y Alertas Insumos ---
         st.subheader("📊 Reportes Predictivos y Alertas")
@@ -316,11 +371,13 @@ try:
             df_display['Días Restantes'] = df_display['Días Restantes'].apply(lambda x: "Sin Consumo" if x==np.inf else round(x,1))
             st.dataframe(df_display)
 
-            alertas = df_display[df_display['Días Restantes']!="Sin Consumo"]
-            alertas = alertas[alertas['Días Restantes']<=30]
-            if not alertas.empty:
+            # Lógica corregida para alertas numéricas
+            alertas_num = df_reporte_ins[df_reporte_ins['Días Restantes'] != np.inf].copy()
+            alertas_num = alertas_num[alertas_num['Días Restantes'] <= 30]
+            
+            if not alertas_num.empty:
                 st.warning("⚠️ Alertas de Stock Bajo")
-                st.dataframe(alertas[['Código','Descripción','Planta','Días Restantes','Unidad']])
+                st.dataframe(alertas_num[['Código','Descripción','Planta','Días Restantes','Unidad']])
 
         st.subheader("📖 Historial")
         if not df_stock.empty:

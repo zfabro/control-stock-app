@@ -40,14 +40,12 @@ def conectar_google_client():
     # st.success("Cliente Google Autorizado ✅") # Comentado para limpiar interfaz
     return client
 
-# --- Funciones de Datos (CORREGIDAS) ---
 def cargar_y_procesar_datos(client):
     if client is None:
         return pd.DataFrame()
 
     try:
         sheet = client.open("Base de Datos Fábrica").sheet1
-        # Usamos get_all_values para evitar errores de formato en celdas vacías
         data = sheet.get_all_values()
         
         if not data:
@@ -56,66 +54,67 @@ def cargar_y_procesar_datos(client):
         headers = data.pop(0)
         df = pd.DataFrame(data, columns=headers)
     except Exception as e:
-        st.warning(f"No se pudieron cargar los datos de GSheet: {e}")
+        st.warning(f"Error al leer Google Sheets: {e}")
         return pd.DataFrame()
 
-    # Normalizamos nombres de columnas
+    # Normalizamos columnas
     df.columns = [c.lower().strip() for c in df.columns]
     required_cols_db = ['fecha_hora', 'cantidad', 'material_codigo']
     
     if not df.empty and all(col in df.columns for col in required_cols_db):
-        # 1. Limpieza de Fechas (dayfirst=True maneja 10/12/2025 correctamente)
-        df['fecha_hora'] = pd.to_datetime(df['fecha_hora'], dayfirst=True, errors='coerce')
+        # Guardamos una copia para debug
+        filas_totales = len(df)
         
-        # 2. Limpieza de Cantidad (Reemplaza coma por punto y convierte a numero)
+        # 1. Limpieza de Fechas: Intentamos formato ISO primero, luego día/mes
+        df['fecha_hora'] = pd.to_datetime(df['fecha_hora'], format='mixed', dayfirst=True, errors='coerce')
+        
+        # 2. Limpieza Cantidad
         df['cantidad'] = df['cantidad'].astype(str).str.replace(',', '.', regex=False)
         df['cantidad'] = pd.to_numeric(df['cantidad'], errors='coerce')
         
         if 'planta' not in df.columns:
             df['planta'] = 'N/A'
             
-        # 3. Eliminar filas inválidas
-        df.dropna(subset=['fecha_hora', 'cantidad', 'material_codigo'], inplace=True)
+        # 3. Eliminar nulos
+        df_clean = df.dropna(subset=['fecha_hora', 'cantidad', 'material_codigo']).copy()
         
-        # 4. ORDENAR POR FECHA (Vital para que el último stock sea el correcto)
-        df = df.sort_values(by='fecha_hora', ascending=True)
-        
-    elif not df.empty:
-        st.warning(f"Datos cargados, pero faltan columnas clave. Encontradas: {df.columns.tolist()}")
-        return pd.DataFrame()
+        # DEBUG: Si se borraron filas, avisar (puede ser útil verlo en consola)
+        filas_borradas = filas_totales - len(df_clean)
+        if filas_borradas > 0:
+            print(f"⚠️ OJO: Se descartaron {filas_borradas} filas por formato incorrecto.")
+            
+        # 4. Ordenar
+        df_clean = df_clean.sort_values(by='fecha_hora', ascending=True)
+        return df_clean
         
     return df
 
 def guardar_dato_gsheet(client, nuevo_dato):
-    """
-    Guarda un dato en Google Sheets.
-    Devuelve True si fue exitoso, False si falló.
-    NOTA: NO hace st.rerun() aquí, para permitir guardado en bucle.
-    """
     if client is None:
         return False
 
     try:
         sheet = client.open("Base de Datos Fábrica").sheet1
         
-        # Verificar si faltan encabezados (Hoja nueva o borrada)
+        # Verificar si faltan encabezados
         if not sheet.acell('A1').value:
             sheet.append_row(['material_codigo', 'fecha_hora', 'cantidad', 'planta'])
             time.sleep(1)
 
-        # Sanitizar dato de cantidad (Evitar error de listas)
+        # Sanitizar cantidad
         cant_raw = nuevo_dato['cantidad']
         if isinstance(cant_raw, list):
             cant_final = float(cant_raw[0])
         else:
             cant_final = float(cant_raw)
             
-        # Formatear fecha
-        fecha_str = nuevo_dato['fecha_hora'].strftime("%d/%m/%Y %H:%M:%S")
+        # --- CAMBIO CLAVE: FORMATO ISO (Año-Mes-Día) ---
+        # Esto evita que 10/12 se confunda con 12/10
+        fecha_iso = nuevo_dato['fecha_hora'].strftime("%Y-%m-%d %H:%M:%S")
         
         fila = [
             str(nuevo_dato['material_descripcion']),
-            fecha_str,
+            fecha_iso, # Usamos formato universal
             cant_final,
             str(nuevo_dato['planta'])
         ]
@@ -478,3 +477,23 @@ try:
 except Exception as e:
     st.error("Ocurrió un error inesperado en la aplicación.")
     st.error(f"Detalle: {e}")
+    
+    # --- ZONA DE DIAGNÓSTICO (Pegar esto al final del bloque try principal) ---
+    st.markdown("---")
+    with st.expander("🕵️ Inspector de Datos (Usar si no actualiza)"):
+        col_debug_1, col_debug_2 = st.columns([1, 4])
+        with col_debug_1:
+            if st.button("🔄 Forzar Recarga"):
+                st.cache_resource.clear()
+                st.rerun()
+        with col_debug_2:
+            st.info("Si los datos no se actualizan, apretá el botón 'Forzar Recarga'.")
+            
+        st.write("### Datos Crudos en Google Sheets (Últimas 5 filas):")
+        # Leemos directo sin procesar para ver si el dato llegó
+        try:
+            raw_sheet = gspread_client.open("Base de Datos Fábrica").sheet1
+            raw_data = raw_sheet.get_all_values()
+            st.table(raw_data[-5:] if len(raw_data) > 5 else raw_data)
+        except:
+            st.write("No se pudo conectar para ver datos crudos.")

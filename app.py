@@ -41,45 +41,45 @@ def conectar_google_client():
     st.success("Cliente Google Autorizado ✅ (Cuenta de Servicio)")
     return client
 
-# --- Funciones de Datos (CORREGIDAS) ---
 def cargar_y_procesar_datos(client):
     if client is None:
         return pd.DataFrame()
 
     try:
         sheet = client.open("Base de Datos Fábrica").sheet1
-        # get_all_records a veces falla si hay celdas con errores, values es más seguro
         data = sheet.get_all_values()
         if not data:
             return pd.DataFrame()
-            
+        
         headers = data.pop(0)
         df = pd.DataFrame(data, columns=headers)
     except Exception as e:
-        st.warning(f"No se pudieron cargar los datos de GSheet: {e}")
+        st.warning(f"No se pudieron cargar los datos: {e}")
         return pd.DataFrame()
 
-    required_cols_db = ['fecha_hora', 'cantidad', 'material_codigo']
-    
-    # Normalizamos nombres de columnas (minusculas y sin espacios extra)
+    # Normalizamos nombres de columnas
     df.columns = [c.lower().strip() for c in df.columns]
     
+    required_cols_db = ['fecha_hora', 'cantidad', 'material_codigo']
+    
     if not df.empty and all(col in df.columns for col in required_cols_db):
-        # 1. Limpieza de Fechas: Usamos dayfirst=True para ser flexibles (acepta 10/12/25 y 2025-12-10)
+        # 1. Procesar FECHA con flexibilidad y manejo de errores
+        # dayfirst=True ayuda a que '10/12' sea 10 de Diciembre y no 12 de Octubre
         df['fecha_hora'] = pd.to_datetime(df['fecha_hora'], dayfirst=True, errors='coerce')
         
-        # 2. Limpieza de Cantidad: Reemplazamos comas por puntos si el sheet está en español
+        # 2. Procesar CANTIDAD
         df['cantidad'] = df['cantidad'].astype(str).str.replace(',', '.', regex=False)
         df['cantidad'] = pd.to_numeric(df['cantidad'], errors='coerce')
         
         if 'planta' not in df.columns:
             df['planta'] = 'N/A'
             
-        # Filtramos solo lo que sea realmente inválido
+        # 3. Eliminar filas que no tengan fecha válida o cantidad válida
         df.dropna(subset=['fecha_hora', 'cantidad', 'material_codigo'], inplace=True)
-    elif not df.empty:
-        st.warning(f"⚠️ Las columnas del Sheet no coinciden. Se esperan: {required_cols_db}. Se encontraron: {df.columns.tolist()}")
-        return pd.DataFrame()
+        
+        # --- CORRECCIÓN CLAVE: ORDENAR POR FECHA ---
+        # Esto asegura que la última fila siempre sea la fecha más reciente
+        df = df.sort_values(by='fecha_hora', ascending=True)
         
     return df
 

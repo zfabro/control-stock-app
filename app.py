@@ -41,34 +41,46 @@ def conectar_google_client():
     st.success("Cliente Google Autorizado ✅ (Cuenta de Servicio)")
     return client
 
-# --- Funciones de Datos ---
+# --- Funciones de Datos (CORREGIDAS) ---
 def cargar_y_procesar_datos(client):
     if client is None:
         return pd.DataFrame()
 
     try:
         sheet = client.open("Base de Datos Fábrica").sheet1
-        records = sheet.get_all_records()
-    except gspread.exceptions.SpreadsheetNotFound:
-        st.error("Error: No se encontró la hoja de cálculo 'Base de Datos Fábrica'.")
-        st.stop()
+        # get_all_records a veces falla si hay celdas con errores, values es más seguro
+        data = sheet.get_all_values()
+        if not data:
+            return pd.DataFrame()
+            
+        headers = data.pop(0)
+        df = pd.DataFrame(data, columns=headers)
     except Exception as e:
         st.warning(f"No se pudieron cargar los datos de GSheet: {e}")
         return pd.DataFrame()
 
-    df = pd.DataFrame(records)
     required_cols_db = ['fecha_hora', 'cantidad', 'material_codigo']
+    
+    # Normalizamos nombres de columnas (minusculas y sin espacios extra)
+    df.columns = [c.lower().strip() for c in df.columns]
+    
     if not df.empty and all(col in df.columns for col in required_cols_db):
-        df['fecha_hora'] = df['fecha_hora'].astype(str).str.strip()
-        formato_nuevo = pd.to_datetime(df['fecha_hora'], format="%d/%m/%Y %H:%M:%S", errors='coerce')
-        formato_viejo = pd.to_datetime(df['fecha_hora'], errors='coerce')
-        df['fecha_hora'] = formato_nuevo.fillna(formato_viejo)
+        # 1. Limpieza de Fechas: Usamos dayfirst=True para ser flexibles (acepta 10/12/25 y 2025-12-10)
+        df['fecha_hora'] = pd.to_datetime(df['fecha_hora'], dayfirst=True, errors='coerce')
+        
+        # 2. Limpieza de Cantidad: Reemplazamos comas por puntos si el sheet está en español
+        df['cantidad'] = df['cantidad'].astype(str).str.replace(',', '.', regex=False)
         df['cantidad'] = pd.to_numeric(df['cantidad'], errors='coerce')
+        
         if 'planta' not in df.columns:
             df['planta'] = 'N/A'
+            
+        # Filtramos solo lo que sea realmente inválido
         df.dropna(subset=['fecha_hora', 'cantidad', 'material_codigo'], inplace=True)
     elif not df.empty:
-        st.warning(f"Datos cargados, pero podrían faltar columnas requeridas ({required_cols_db}) o tener formato inesperado.")
+        st.warning(f"⚠️ Las columnas del Sheet no coinciden. Se esperan: {required_cols_db}. Se encontraron: {df.columns.tolist()}")
+        return pd.DataFrame()
+        
     return df
 
 def guardar_dato_gsheet(client, nuevo_dato):
@@ -77,31 +89,39 @@ def guardar_dato_gsheet(client, nuevo_dato):
         return
 
     try:
-        # --- CORRECCIÓN AQUÍ: Sanitizar el dato de cantidad ---
-        cantidad_raw = nuevo_dato['cantidad']
-        
-        # Si por error llega una lista (ej: [50]), tomamos el primer valor
-        if isinstance(cantidad_raw, list):
-            cantidad_final = float(cantidad_raw[0])
+        # --- SANITIZACIÓN DE DATOS (Vital para que GSheets no falle) ---
+        # 1. Asegurar que la cantidad sea un float nativo de Python (no numpy)
+        cant_raw = nuevo_dato['cantidad']
+        if isinstance(cant_raw, list):
+            cant_final = float(cant_raw[0])
         else:
-            cantidad_final = float(cantidad_raw)
+            cant_final = float(cant_raw)
             
+        # 2. Fecha como string simple
+        fecha_str = nuevo_dato['fecha_hora'].strftime("%d/%m/%Y %H:%M:%S")
+        
+        # 3. Construir fila con tipos básicos
         fila = [
             str(nuevo_dato['material_descripcion']),
-            nuevo_dato['fecha_hora'].strftime("%d/%m/%Y %H:%M:%S"),
-            cantidad_final,
+            fecha_str,
+            cant_final, # Python float puro
             str(nuevo_dato['planta'])
         ]
         
         sheet = client.open("Base de Datos Fábrica").sheet1
         sheet.append_row(fila)
-        st.success(f"¡Guardado! Actualizando vista...")
+        
+        st.toast(f"✅ Guardado: {nuevo_dato['material_descripcion']} ({cant_final})", icon="💾")
+        
+        # Forzamos limpieza de caché para que al recargar lea el dato nuevo
         st.cache_resource.clear()
-        time.sleep(1.5)
+        time.sleep(1) # Damos un respiro a la API
         st.rerun()
         
     except Exception as e:
-        st.error(f"Error al procesar o guardar los datos: {e}")
+        st.error(f"❌ Error CRÍTICO al guardar en Google Sheets: {e}")
+        # Imprimimos el error en consola también para debug
+        print(f"Error detallado: {e}")
 
 def calcular_consumo_diario(df_historial):
     if len(df_historial) < 2:
